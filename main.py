@@ -1,4 +1,4 @@
-import os, time, math, requests, statistics
+import os, time, math, requests
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
@@ -6,36 +6,13 @@ from datetime import datetime, timezone
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# Olası tüm Binance Futures endpoint'leri
-BINANCE_ENDPOINTS = [
-    "https://api.binancefuture.com",
-    "https://fapi.binance.com",
-    "https://fapi1.binance.com",
-    "https://fapi3.binance.com",
-    "https://data-api.binance.vision"
-]
+MEXC_FAPI = "https://contract.mexc.com"
 
 # ---------- Utils ----------
 def ts():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-def pick_working_endpoint():
-    for e in BINANCE_ENDPOINTS:
-        try:
-            test_url = f"{e}/fapi/v1/exchangeInfo"
-            r = requests.get(test_url, timeout=8)
-            if r.status_code == 200:
-                print(f"✅ Çalışan endpoint bulundu: {e}")
-                return e
-        except Exception:
-            continue
-    print("⚠️ Hiçbir endpoint çalışmadı, varsayılan fapi.binance.com kullanılacak.")
-    return "https://fapi.binance.com"
-
-BASE_API = pick_working_endpoint()
-
-def get_json(path, params=None, retries=3, timeout=10):
-    url = f"{BASE_API}{path}"
+def get_json(url, params=None, retries=3, timeout=10):
     for i in range(retries):
         try:
             r = requests.get(url, params=params, timeout=timeout)
@@ -55,16 +32,27 @@ def telegram_send(text):
     except:
         print("Telegram gönderim hatası.")
 
-def klines(symbol, interval, limit=300):
-    data = get_json("/fapi/v1/klines", {"symbol": symbol, "interval": interval, "limit": limit})
-    if not data:
+# ---------- Data ----------
+def futures_symbols():
+    data = get_json(f"{MEXC_FAPI}/api/v1/contract/detail")
+    out = []
+    if not data or "data" not in data:
+        return out
+    for s in data["data"]:
+        if s.get("quoteCoin") == "USDT":
+            out.append(s["symbol"])
+    return out
+
+def klines(symbol, interval="1h", limit=200):
+    data = get_json(f"{MEXC_FAPI}/api/v1/contract/kline/{symbol}", {"interval": interval, "limit": limit})
+    if not data or "data" not in data:
         return None
-    cols = ["open_time","open","high","low","close","volume","close_time","qav","trades","tbbav","tbqav","ignore"]
-    df = pd.DataFrame(data, columns=cols)
+    df = pd.DataFrame(data["data"])
+    df.columns = ["timestamp", "open", "high", "low", "close", "volume", "turnover"]
     df = df.astype({"open":"float64","high":"float64","low":"float64","close":"float64","volume":"float64"})
     return df
 
-# ---------- Göstergeler ----------
+# ---------- Indicators ----------
 def rsi(series, period=14):
     delta = series.diff()
     up = delta.clip(lower=0)
@@ -84,7 +72,7 @@ def macd(series, f=12, s=26, sig=9):
     signal = macd_line.ewm(span=sig, adjust=False).mean()
     return macd_line, signal, macd_line - signal
 
-# ---------- SMC Fonksiyonları ----------
+# ---------- SMC ----------
 def break_of_structure_up(df, lookback=40, exclude_last=2):
     hh = df['high'][:-exclude_last].tail(lookback).max()
     return df['close'].iloc[-1] > hh
@@ -115,7 +103,6 @@ def within_zone(price, zone, tol=0.015):
     pad = (high - low) * tol
     return (price >= low - pad) and (price <= high + pad)
 
-# ---------- Hacim ----------
 def volume_spike(df, avg_n=20, spike_ratio=2.5):
     if len(df) < avg_n + 2: return False, 0.0
     last_vol = df['volume'].iloc[-1]
@@ -124,17 +111,7 @@ def volume_spike(df, avg_n=20, spike_ratio=2.5):
     ratio = last_vol / base
     return ratio >= spike_ratio, ratio
 
-# ---------- Tüm semboller ----------
-def futures_usdt_perp_symbols():
-    info = get_json("/fapi/v1/exchangeInfo")
-    out = []
-    if not info: return out
-    for s in info.get("symbols", []):
-        if s.get("contractType") == "PERPETUAL" and s.get("quoteAsset") == "USDT" and s.get("status") == "TRADING":
-            out.append(s["symbol"])
-    return out
-
-# ---------- Analiz ----------
+# ---------- Analysis ----------
 VOL_PARAMS = {"1h":(20,2.5), "4h":(20,2.5), "1d":(20,2.0)}
 
 def analyze_symbol(sym):
@@ -186,15 +163,15 @@ def analyze_symbol(sym):
         f"• Market Structure: {'BoS↑' if bos_up else ('BoS↓' if bos_dn else '-')}\n"
         f"• Bölge: {'Demand' if buy else 'Supply'} (yakında)\n"
         f"• RSI(14): `{round(r,2)}`  | MACD: *{macd_dir}*  | {ema_trend}\n"
-        f"— Not: RSI/MACD/EMA yorum amaçlıdır; ana sistem SMC+Hacim."
+        f"— Not: RSI/MACD/EMA *yorum amaçlıdır*; ana sistem SMC+Hacim."
     )
     return msg
 
-# ---------- Ana Fonksiyon ----------
+# ---------- Main ----------
 def main():
-    syms = futures_usdt_perp_symbols()
+    syms = futures_symbols()
     if not syms:
-        telegram_send("⚠️ *Sembol listesi alınamadı!* Binance API erişimi başarısız.")
+        telegram_send("⚠️ *Sembol listesi alınamadı!* MEXC API erişimi başarısız.")
         return
 
     telegram_send(f"✅ {len(syms)} sembol bulundu, tarama başlıyor...")
