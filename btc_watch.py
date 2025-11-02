@@ -5,9 +5,7 @@ from datetime import datetime, timezone
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-
-# SPOT veri kaynağı (daha stabil)
-MEXC_SPOT = "https://api.mexc.com"
+BINANCE_API = "https://api.binance.com"  # her yerden erişilebilir
 
 def ts(): return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -32,7 +30,7 @@ def telegram_send(text):
         print("Telegram gönderim hatası.")
 
 def klines(symbol, interval="1h", limit=200):
-    data = get_json(f"{MEXC_SPOT}/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": limit})
+    data = get_json(f"{BINANCE_API}/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": limit})
     if not data:
         return None
     cols = ["open_time","open","high","low","close","volume","close_time","qav","trades","tbbav","tbqav","ignore"]
@@ -40,7 +38,6 @@ def klines(symbol, interval="1h", limit=200):
     df = df.astype({"open":"float64","high":"float64","low":"float64","close":"float64","volume":"float64"})
     return df
 
-# ----- indicators -----
 def ema(x, n): return x.ewm(span=n, adjust=False).mean()
 
 def rsi(s, n=14):
@@ -57,7 +54,6 @@ def atr(df, n=14):
     tr = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift()), abs(df['low'] - df['close'].shift())))
     return pd.Series(tr).ewm(span=n, adjust=False).mean()
 
-# ----- smc helpers -----
 def bos_up(df, look=40, excl=2):
     hh = df['high'][:-excl].tail(look).max()
     return df['close'].iloc[-1] > hh
