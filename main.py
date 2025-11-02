@@ -7,6 +7,25 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 BINANCE_FAPI = "https://fapi.binance.com"
+ALT_BINANCE = "https://api1.binance.com"
+
+def get(url, params=None, retries=3, timeout=15):
+    for i in range(retries):
+        try:
+            r = requests.get(url, params=params, timeout=timeout)
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            # alternatife geç
+            try:
+                alt_url = url.replace("fapi.binance.com", "api1.binance.com")
+                r2 = requests.get(alt_url, params=params, timeout=timeout)
+                if r2.status_code == 200:
+                    return r2.json()
+            except:
+                pass
+        time.sleep(0.5*(i+1))
+    return None
 
 # ---------- Utils ----------
 def ts():
