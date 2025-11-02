@@ -1,9 +1,9 @@
-name: crypto-scout
+name: btc-eth-watch
 
 on:
   schedule:
-    - cron: "0 * * * *"   # Her saat başı otomatik çalışır (UTC)
-  workflow_dispatch:       # Manuel çalıştırma
+    - cron: "0 * * * *"   # Her saat başı çalışır
+  workflow_dispatch:
 
 jobs:
   run:
@@ -23,14 +23,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: MEXC Sinyal Tarayıcı (SMC + Hacim)
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: |
-          python main.py
-
-      - name: BTC/ETH Günlük Durum Özeti
+      - name: BTC & ETH Trend Özeti
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
