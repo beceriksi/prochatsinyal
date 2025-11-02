@@ -5,9 +5,10 @@ from datetime import datetime, timezone
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-MEXC_FAPI = "https://contract.mexc.com"
 
-# ----- utils -----
+# SPOT veri kaynağı (daha stabil)
+MEXC_SPOT = "https://api.mexc.com"
+
 def ts(): return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 def get_json(url, params=None, retries=3, timeout=10):
@@ -31,12 +32,12 @@ def telegram_send(text):
         print("Telegram gönderim hatası.")
 
 def klines(symbol, interval="1h", limit=200):
-    # MEXC Futures endpoint (örnek: BTC_USDT, ETH_USDT)
-    data = get_json(f"{MEXC_FAPI}/api/v1/contract/kline/{symbol}", {"interval": interval, "limit": limit})
-    if not data or "data" not in data:
+    data = get_json(f"{MEXC_SPOT}/api/v3/klines", {"symbol": symbol, "interval": interval, "limit": limit})
+    if not data:
         return None
-    df = pd.DataFrame(data["data"], columns=["ts","open","high","low","close","vol","turnover"])
-    df = df.astype({"open":"float64","high":"float64","low":"float64","close":"float64","vol":"float64"})
+    cols = ["open_time","open","high","low","close","volume","close_time","qav","trades","tbbav","tbqav","ignore"]
+    df = pd.DataFrame(data, columns=cols)
+    df = df.astype({"open":"float64","high":"float64","low":"float64","close":"float64","volume":"float64"})
     return df
 
 # ----- indicators -----
@@ -65,7 +66,6 @@ def bos_dn(df, look=40, excl=2):
     ll = df['low'][:-excl].tail(look).min()
     return df['close'].iloc[-1] < ll
 
-# ----- analiz fonksiyonları -----
 def brief_for(df):
     c = df['close']
     e20, e50 = ema(c,20).iloc[-1], ema(c,50).iloc[-1]
@@ -73,7 +73,7 @@ def brief_for(df):
     r = float(rsi(c,14).iloc[-1])
     m, s = macd(c)
     macd_dir = "↑" if m.iloc[-1] > s.iloc[-1] else "↓"
-    vu = df['vol'].iloc[-1] / (df['vol'].iloc[-21:-1].mean() + 1e-12)
+    vu = df['volume'].iloc[-1] / (df['volume'].iloc[-21:-1].mean() + 1e-12)
     bos = "BoS↑" if bos_up(df) else ("BoS↓" if bos_dn(df) else "-")
     volat = atr(df).iloc[-1] / (c.iloc[-1] + 1e-12) * 100
     return trend, r, macd_dir, bos, f"x{vu:.2f}", float(c.iloc[-1]), float(volat)
@@ -95,7 +95,7 @@ def pack(name, d1, d4, dH):
     return hdr + "\n" + "\n".join(lines)
 
 def main():
-    pairs = [("BTC", "BTC_USDT"), ("ETH", "ETH_USDT")]
+    pairs = [("BTC", "BTCUSDT"), ("ETH", "ETHUSDT")]
     out = [f"⏱ {ts()} — *BTC/ETH Piyasa Özeti*"]
     for name, sym in pairs:
         d1 = klines(sym, "1d", 300)
