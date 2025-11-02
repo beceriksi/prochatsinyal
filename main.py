@@ -6,8 +6,9 @@ from datetime import datetime, timezone
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# Ana ve yedek Binance API endpoint'leri
+# Olası tüm Binance Futures endpoint'leri
 BINANCE_ENDPOINTS = [
+    "https://api.binancefuture.com",
     "https://fapi.binance.com",
     "https://fapi1.binance.com",
     "https://fapi3.binance.com",
@@ -18,21 +19,34 @@ BINANCE_ENDPOINTS = [
 def ts():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-def get_json(url, params=None, retries=3, timeout=10):
-    for attempt in range(retries):
-        for endpoint in BINANCE_ENDPOINTS:
-            try:
-                u = url.replace("https://fapi.binance.com", endpoint)
-                r = requests.get(u, params=params, timeout=timeout)
-                if r.status_code == 200:
-                    return r.json()
-            except Exception:
-                pass
-        time.sleep(1)
+def pick_working_endpoint():
+    for e in BINANCE_ENDPOINTS:
+        try:
+            test_url = f"{e}/fapi/v1/exchangeInfo"
+            r = requests.get(test_url, timeout=8)
+            if r.status_code == 200:
+                print(f"✅ Çalışan endpoint bulundu: {e}")
+                return e
+        except Exception:
+            continue
+    print("⚠️ Hiçbir endpoint çalışmadı, varsayılan fapi.binance.com kullanılacak.")
+    return "https://fapi.binance.com"
+
+BASE_API = pick_working_endpoint()
+
+def get_json(path, params=None, retries=3, timeout=10):
+    url = f"{BASE_API}{path}"
+    for i in range(retries):
+        try:
+            r = requests.get(url, params=params, timeout=timeout)
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            time.sleep(1)
     return None
 
 def telegram_send(text):
-    if not TELEGRAM_TOKEN or not CHAT_ID: 
+    if not TELEGRAM_TOKEN or not CHAT_ID:
         print("Telegram bilgisi eksik, mesaj:\n", text)
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -42,9 +56,9 @@ def telegram_send(text):
         print("Telegram gönderim hatası.")
 
 def klines(symbol, interval, limit=300):
-    url = f"https://fapi.binance.com/fapi/v1/klines"
-    data = get_json(url, {"symbol": symbol, "interval": interval, "limit": limit})
-    if not data: return None
+    data = get_json("/fapi/v1/klines", {"symbol": symbol, "interval": interval, "limit": limit})
+    if not data:
+        return None
     cols = ["open_time","open","high","low","close","volume","close_time","qav","trades","tbbav","tbqav","ignore"]
     df = pd.DataFrame(data, columns=cols)
     df = df.astype({"open":"float64","high":"float64","low":"float64","close":"float64","volume":"float64"})
@@ -68,8 +82,7 @@ def macd(series, f=12, s=26, sig=9):
     slow = ema(series, s)
     macd_line = fast - slow
     signal = macd_line.ewm(span=sig, adjust=False).mean()
-    hist = macd_line - signal
-    return macd_line, signal, hist
+    return macd_line, signal, macd_line - signal
 
 # ---------- SMC Fonksiyonları ----------
 def break_of_structure_up(df, lookback=40, exclude_last=2):
@@ -82,25 +95,19 @@ def break_of_structure_down(df, lookback=40, exclude_last=2):
 
 def last_down_candle_before_bos(df, lookback=50):
     sub = df.tail(lookback)
-    idx = None
     for i in range(len(sub)-2, 0, -1):
         if sub['close'].iloc[i] < sub['open'].iloc[i]:
-            idx = sub.index[i]
-            break
-    if idx is None: return None
-    row = df.loc[idx]
-    return float(row['low']), float(max(row['open'], row['close']))
+            row = sub.iloc[i]
+            return float(row['low']), float(max(row['open'], row['close']))
+    return None
 
 def last_up_candle_before_bos(df, lookback=50):
     sub = df.tail(lookback)
-    idx = None
     for i in range(len(sub)-2, 0, -1):
         if sub['close'].iloc[i] > sub['open'].iloc[i]:
-            idx = sub.index[i]
-            break
-    if idx is None: return None
-    row = df.loc[idx]
-    return float(min(row['open'], row['close'])), float(row['high'])
+            row = sub.iloc[i]
+            return float(min(row['open'], row['close'])), float(row['high'])
+    return None
 
 def within_zone(price, zone, tol=0.015):
     if not zone: return False
@@ -119,8 +126,7 @@ def volume_spike(df, avg_n=20, spike_ratio=2.5):
 
 # ---------- Tüm semboller ----------
 def futures_usdt_perp_symbols():
-    url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
-    info = get_json(url)
+    info = get_json("/fapi/v1/exchangeInfo")
     out = []
     if not info: return out
     for s in info.get("symbols", []):
@@ -129,7 +135,6 @@ def futures_usdt_perp_symbols():
     return out
 
 # ---------- Analiz ----------
-INTERVALS = ["1h","4h","1d"]
 VOL_PARAMS = {"1h":(20,2.5), "4h":(20,2.5), "1d":(20,2.0)}
 
 def analyze_symbol(sym):
@@ -141,7 +146,7 @@ def analyze_symbol(sym):
     r = rsi(close, 14).iloc[-1]
     ema20 = ema(close, 20).iloc[-1]
     ema50 = ema(close, 50).iloc[-1]
-    m, s, h = macd(close, 12, 26, 9)
+    m, s, _ = macd(close, 12, 26, 9)
     macd_dir = "Yukarı" if m.iloc[-1] > s.iloc[-1] else "Aşağı"
 
     bos_up = break_of_structure_up(df4h, 40, 2)
@@ -181,7 +186,7 @@ def analyze_symbol(sym):
         f"• Market Structure: {'BoS↑' if bos_up else ('BoS↓' if bos_dn else '-')}\n"
         f"• Bölge: {'Demand' if buy else 'Supply'} (yakında)\n"
         f"• RSI(14): `{round(r,2)}`  | MACD: *{macd_dir}*  | {ema_trend}\n"
-        f"— Not: RSI/MACD/EMA *yorum amaçlıdır*; ana sistem SMC+Hacim."
+        f"— Not: RSI/MACD/EMA yorum amaçlıdır; ana sistem SMC+Hacim."
     )
     return msg
 
