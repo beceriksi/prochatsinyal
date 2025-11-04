@@ -1,7 +1,7 @@
-name: mexc-1d
+name: multi-fast-mexc
 on:
   schedule:
-    - cron: "0 0 * * *"   # her gün 00:00 UTC
+    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -15,7 +15,7 @@ jobs:
       - run: |
           python -m pip install --upgrade pip
           pip install pandas numpy requests
-          python mexc_1d_bot.py
+          python multi_tf_fast_mexc.py
     env:
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       CHAT_ID: ${{ secrets.CHAT_ID }}
