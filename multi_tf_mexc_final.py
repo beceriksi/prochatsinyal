@@ -4,17 +4,20 @@ from datetime import datetime, timezone
 # === Ayarlar ===
 TELEGRAM_TOKEN=os.getenv("TELEGRAM_TOKEN")
 CHAT_ID=os.getenv("CHAT_ID")
-MEXC_BASE="https://contract.mexc.com"
+MEXC_BASE="https://futures.mexc.com"
 
 def ts(): return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 # --- Yardımcı ---
-def jget(url, params=None, retries=2, timeout=6):
+def jget(url, params=None, retries=4, timeout=10):
     for _ in range(retries):
         try:
             r=requests.get(url, params=params, timeout=timeout)
-            if r.status_code==200: return r.json()
-        except: time.sleep(0.2)
+            if r.status_code==200:
+                j=r.json()
+                if "data" in j and j["data"]:
+                    return j
+        except: time.sleep(0.5)
     return None
 
 def telegram(msg):
@@ -42,7 +45,7 @@ def adx(df,n=14):
     dx=((plus_di-minus_di).abs()/((plus_di+minus_di)+1e-12))*100
     return dx.ewm(alpha=1/n, adjust=False).mean()
 
-def volume_spike(df,n=10,r=1.15):
+def volume_spike(df,n=10,r=1.10):
     t=df['turnover']
     base=t.ewm(span=n, adjust=False).mean()
     ratio=float(t.iloc[-1]/(base.iloc[-2]+1e-12))
@@ -50,11 +53,17 @@ def volume_spike(df,n=10,r=1.15):
 
 # --- coin çek ---
 def mexc_symbols():
-    d=jget(f"{MEXC_BASE}/api/v1/contract/detail")
+    urls=[
+        f"{MEXC_BASE}/api/v1/contract/detail",
+        "https://contract.mexc.com/api/v1/contract/detail"
+    ]
+    for u in urls:
+        d=jget(u)
+        if d and "data" in d: break
     if not d or "data" not in d: return []
     data=[x for x in d["data"] if x.get("quoteCoin")=="USDT" and x.get("state")=="LIVE"]
     data=sorted(data,key=lambda x:x.get("turnover",0),reverse=True)
-    return [c["symbol"] for c in data[:150]]  # ilk 150 en likit
+    return [c["symbol"] for c in data[:150]]
 
 def klines(sym,interval="1h",limit=120):
     d=jget(f"{MEXC_BASE}/api/v1/contract/kline/{sym}",{"interval":interval,"limit":limit})
@@ -68,7 +77,7 @@ def klines(sym,interval="1h",limit=120):
 def analyze(sym,interval):
     df=klines(sym,interval)
     if df is None or len(df)<60: return None
-    if df["turnover"].iloc[-1]<250_000: return None
+    if df["turnover"].iloc[-1]<200_000: return None
     c,h,l=df['close'],df['high'],df['low']
     rr=float(rsi(c).iloc[-1]); e20,e50=ema(c,20).iloc[-1],ema(c,50).iloc[-1]
     trend_up=e20>e50
@@ -84,7 +93,8 @@ def analyze(sym,interval):
 def main():
     syms=mexc_symbols()
     if not syms:
-        telegram("⚠️ MEXC sembolleri alınamadı."); return
+        telegram("⚠️ MEXC sembolleri alınamadı (API yanıtı boş).")
+        return
     signals=[]
     for s in syms:
         for tf in ["1h","4h","1d"]:
