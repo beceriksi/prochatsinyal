@@ -1,4 +1,4 @@
-name: multi-fast-mexc
+name: mexc-multi-final
 on:
   schedule:
     - cron: "*/15 * * * *"
@@ -15,7 +15,7 @@ jobs:
       - run: |
           python -m pip install --upgrade pip
           pip install pandas numpy requests
-          python multi_tf_fast_mexc.py
+          python multi_tf_mexc_final.py
     env:
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       CHAT_ID: ${{ secrets.CHAT_ID }}
