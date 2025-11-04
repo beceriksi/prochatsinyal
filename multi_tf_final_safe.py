@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 TELEGRAM_TOKEN=os.getenv("TELEGRAM_TOKEN")
 CHAT_ID=os.getenv("CHAT_ID")
 MEXC_BASE="https://futures.mexc.com"
+BINANCE="https://api.binance.com"
 
 def ts(): return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -28,7 +29,7 @@ def telegram(msg):
                       json={"chat_id":CHAT_ID,"text":msg,"parse_mode":"Markdown"})
     except: pass
 
-# --- indikatörler ---
+# --- İndikatörler ---
 def ema(x,n): return x.ewm(span=n, adjust=False).mean()
 def rsi(s,n=14):
     d=s.diff(); up=d.clip(lower=0); dn=-d.clip(upper=0)
@@ -51,31 +52,47 @@ def volume_spike(df,n=10,r=1.10):
     ratio=float(t.iloc[-1]/(base.iloc[-2]+1e-12))
     return ratio>=r,ratio
 
-# --- coin çek ---
+# --- Coin Listesi ---
 def mexc_symbols():
     urls=[
-        f"{MEXC_BASE}/api/v1/contract/detail",
+        "https://api.mexc.com/api/v1/contract/detail",
+        "https://futures.mexc.com/api/v1/private/contract/list",
         "https://contract.mexc.com/api/v1/contract/detail"
     ]
     for u in urls:
         d=jget(u)
-        if d and "data" in d: break
-    if not d or "data" not in d: return []
-    data=[x for x in d["data"] if x.get("quoteCoin")=="USDT" and x.get("state")=="LIVE"]
-    data=sorted(data,key=lambda x:x.get("turnover",0),reverse=True)
-    return [c["symbol"] for c in data[:150]]
+        if d and "data" in d and len(d["data"])>5:
+            data=[x for x in d["data"] if x.get("quoteCoin")=="USDT"]
+            return [c["symbol"] for c in data[:150]]
+    return []
 
-def klines(sym,interval="1h",limit=120):
-    d=jget(f"{MEXC_BASE}/api/v1/contract/kline/{sym}",{"interval":interval,"limit":limit})
-    if not d or "data" not in d: return None
-    try:
-        df=pd.DataFrame(d["data"],columns=["ts","open","high","low","close","volume","turnover"]).astype(float)
-        return df
-    except: return None
+def binance_symbols():
+    d=jget(f"{BINANCE}/api/v3/exchangeInfo")
+    if not d or "symbols" not in d: return []
+    pairs=[s["symbol"] for s in d["symbols"] if s.get("quoteAsset")=="USDT" and s.get("status")=="TRADING"]
+    return [p for p in pairs if p.endswith("USDT")][:150]
 
-# --- analiz ---
-def analyze(sym,interval):
-    df=klines(sym,interval)
+# --- Fiyat verisi ---
+def klines(sym,interval="1h",limit=120,use_binance=False):
+    if use_binance:
+        d=jget(f"{BINANCE}/api/v3/klines",{"symbol":sym,"interval":interval,"limit":limit})
+        if not d: return None
+        try:
+            df=pd.DataFrame(d,columns=["t","open","high","low","close","v","ct","qv","trades","tb","tq","ig"]).astype(float)
+            df.rename(columns={"close":"c","v":"turnover"},inplace=True)
+            return df
+        except: return None
+    else:
+        d=jget(f"{MEXC_BASE}/api/v1/contract/kline/{sym}",{"interval":interval,"limit":limit})
+        if not d or "data" not in d: return None
+        try:
+            df=pd.DataFrame(d["data"],columns=["ts","open","high","low","close","volume","turnover"]).astype(float)
+            return df
+        except: return None
+
+# --- Analiz ---
+def analyze(sym,interval,use_binance=False):
+    df=klines(sym,interval,use_binance=use_binance)
     if df is None or len(df)<60: return None
     if df["turnover"].iloc[-1]<200_000: return None
     c,h,l=df['close'],df['high'],df['low']
@@ -89,24 +106,32 @@ def analyze(sym,interval):
     a=float(adx(pd.DataFrame({'high':h,'low':l,'close':c}),14).iloc[-1])
     return f"{sym} | {interval.upper()} | {side} | RSI:{rr:.1f} | ADX:{a:.0f} | Hacim x{ratio:.2f}"
 
-# --- ana ---
+# --- Ana ---
 def main():
     syms=mexc_symbols()
+    use_binance=False
     if not syms:
-        telegram("⚠️ MEXC sembolleri alınamadı (API yanıtı boş).")
+        syms=binance_symbols()
+        use_binance=True
+        telegram("⚠️ MEXC yanıtı boş — Binance verisiyle devam ediliyor.")
+    if not syms:
+        telegram("⛔ Hiç sembol alınamadı (MEXC & Binance).")
         return
+
     signals=[]
     for s in syms:
         for tf in ["1h","4h","1d"]:
             try:
-                res=analyze(s,tf)
+                res=analyze(s,tf,use_binance)
                 if res: signals.append(res)
             except: pass
         time.sleep(0.03)
+
     if signals:
-        msg=f"⚡ *MEXC Multi-Timeframe Sinyalleri*\n⏱ {ts()}\n\n"+"\n".join(signals[:70])
+        msg=f"⚡ *Multi-Timeframe Sinyaller*\n⏱ {ts()}\nVeri: {'Binance' if use_binance else 'MEXC'}\n\n"+"\n".join(signals[:70])
         telegram(msg)
     else:
         print("ℹ️ sinyal yok (sessiz).")
 
-if __name__=="__main__": main()
+if __name__=="__main__":
+    main()
